@@ -6,3 +6,4 @@ This project is part of the lecture distributed systems in the masters degree Di
 Topic: Implementation of a bidding place with distributed properties
 Semester: WS20/21
 Team members: Julian Gruber, Björn Ihßen, Julia Menzel
+
