@@ -4,64 +4,51 @@ import time
 from datetime import datetime
 import struct
 import json
-#import concurrent
-#import pickle
-#import uuid
 
-# Broadcast IP Fritzbox 192.168.178.255
-# Broadcast_IP = "192.168.178.255"
 MULTICAST_GROUP_IP = '224.1.1.1'
 
 # Ports
-MULTICAST_PORT_SERVER = 5000 # Port for server to serve Multicast
-UNICAST_PORT_SERVER = 6000 # Port for server to server Unicast --> TCP ONLY
-MULTICAST_PORT_CLIENT = 7000 # Port for clients to discover servers
-
-CLIENT_CONNECTION_TO_LEADER_PORT = 9000
-
-SERVER_CLIENTLIST_PORT = 5100
-SERVER_HEARTBEAT_PORT = 5200
-SERVER_MESSAGELIST_PORT = 5300
-SERVER_LEADER_ELECTION_PORT = 5400
-SERVER_NEW_LEADER_PORT = 5500
-SERVER_SERVERLIST_PORT = 5600
-SERVER_REPLICA_PORT = 5700
-SERVER_CLIENTUPDATE_PORT = 5900
-
+SERVER_MULTICAST_PORT = 5000 # Port for server to discover server 
+CLIENT_MULTICAST_PORT = 7000 # Port for clients to discover servers
+SERVER_HEARTBEAT_PORT = 5200 # Port for sending hearbeat messages
+CLIENT_LEADER_COMMUNICATION_PORT = 5300 # port for client-leader communication
+SERVER_LEADER_ELECTION_PORT = 5400  # Port for sending leader election messages
+SERVER_NEW_LEADER_PORT = 5500 # port for sending election messages
+SERVER_SERVERLIST_PORT = 5600 # port for sending serverlist updates
+SERVER_REPLICA_PORT = 5700 # port for sending replicas
+SERVER_CLIENTLIST_PORT = 5900 # port for sending client list updates
 
 # Localhost information
 MY_HOST = socket.gethostname()
 MY_IP = socket.gethostbyname(MY_HOST)
-# create a ID unique based on host ID and current time
-# MY_ID = uuid.uuid1()
 buffer_size = 1024
 
 class Server():
     def __init__(self):
         self.isLeader = False # variable to mark self as leader
         self.serverList = [] # list if servers and their addresses
-        self.ringForming = False
+        self.ringForming = False # variable to control ring formation function
         self.electionRunning = False # variable to mark an ongoing election
-        self.sorted_ip_ring = []
-        self.neighbour_left = '' # fix the IP of my neighbour
-        #self.neighbour_right = ''
-        self.heartbeat_neighbour = ''
+        self.sorted_ip_ring = [] # list of servers, sorted
+        self.neighbour_left = '' # fix the IP of left neighbour
+        self.heartbeat_neighbour = '' # fix the IP of right neighbour to identify server crash
         self.electionMessage = {} # variable that contains the LCR-Algorithm
-        self.leader_IP = ''
-        self.participant = False
-        self.electionStarter = False
-        self.heartbeatRunning = False
-        self.heartbeatMessage = ''
+        self.leader_IP = '' # fix the leader IP
+        self.participant = False # type of participant in leader election
+        self.electionStarter = False # variable to control leader election function
+        self.heartbeatRunning = False # variable to control heartbeat function
+        self.heartbeatMessage = '' # fix the heartbeat message
         self.clientList = [] # list of clients and their addresses
-        self.auctionList = {'smartphone': 0.00, 'laptop': 0.00, 'monitor': 0.00}
-        self.informServer = False
-        self.sendReplica = False
-        #self.first = True # variable to check if server first started
+        self.auctionList = {'smartphone': 0.00, 'laptop': 0.00, 'monitor': 0.00} # example auction list to place bids on
+        self.informServer = False # 
+        self.sendReplica = False # variable to control replication function
     
+    # print the current date and time
     def printwt(self, msg):
         current_date_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         print(f'[{current_date_time}] {msg}')
 
+    # identify the server list index of an IP
     def findIndexOfElement(self, element, mylist):
         try:
             index = mylist.index(element)
@@ -70,12 +57,13 @@ class Server():
             return None
 
     def MulticastListenAndReply(self):
+        # if my IP is not in the server list add it
         if MY_IP not in self.serverList:
             self.serverList.append(MY_IP)
 
         # create socket bind to server address
         multilis_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        multilis_sock.bind(('', MULTICAST_PORT_SERVER))
+        multilis_sock.bind(('', SERVER_MULTICAST_PORT))
 
         # tell the os to add the socket to the multicast group
         group = socket.inet_aton(MULTICAST_GROUP_IP)
@@ -86,10 +74,9 @@ class Server():
             try:
                 # receive data from other participants
                 data, address = multilis_sock.recvfrom(buffer_size)
-                #self.printwt('Waiting for other guys...')
 
                 if data:
-                    # if you have data decode the message
+                    # if you have data than decode
                     newServer_address = data.decode()
                     self.printwt(f'New participant wants to connect: {newServer_address}')
                     self.heartbeat_neighbour = ''
@@ -100,8 +87,8 @@ class Server():
                     if newServer_address not in self.serverList:
                         self.serverList.append(newServer_address)
                         self.ringForming = True
-                        #self.printwt(f'{self.serverList}, start new ring formation')
 
+                    # reply my IP, send current client list to new server and start ring formation function
                     reply_message = MY_IP
                     multilis_sock.sendto(str.encode(reply_message), address)
                     self.SendClientListUpdate(newServer_address)
@@ -111,24 +98,23 @@ class Server():
                     self.FormRing()
 
             except socket.timeout:
-                # iam the only participant in the system, no election needed
-                #print("time out, no response") 
                 break
 
         time.sleep(1)
 
-    
     def MulticastSendAndReceive(self):
-        message = MY_IP
-        multicast_group = (MULTICAST_GROUP_IP, MULTICAST_PORT_SERVER)
+        # create socket
+        multicast_group = (MULTICAST_GROUP_IP, SERVER_MULTICAST_PORT)
         multisend_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) 
-        multisend_sock.settimeout(5)
+        multisend_sock.settimeout(2)
+
         # set time to live message (network hps; 1 for local)
         ttl = struct.pack('b', 1)
         multisend_sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, ttl)
         self.electionStarter = True
 
         # send my IP to other participants
+        message = MY_IP
         multisend_sock.sendto(message.encode(), multicast_group)
         self.printwt("Sent my IP to server group")
 
@@ -136,6 +122,7 @@ class Server():
         if MY_IP not in self.serverList:
             self.serverList.append(MY_IP)
         
+        # listen for IPs from existing servers
         maxLoop = 5
         currentLoop = 0
         
@@ -145,7 +132,7 @@ class Server():
 
                 try:
                     # receive reply data from the other participants
-                    reply, address = multisend_sock.recvfrom(1024)
+                    reply, address = multisend_sock.recvfrom(buffer_size)
 
                     if reply:
                         # decode received data
@@ -157,9 +144,9 @@ class Server():
 
                 except socket.timeout:
                     break
-
+        
+        # after collecting IPs start ring formation
         if currentLoop == maxLoop:     
-            #self.printwt(f'{maxLoop} loops are done, my groupview is: {self.serverList}')
             multisend_sock.close()
             time.sleep(1)
             self.ringForming = True
@@ -167,14 +154,17 @@ class Server():
             
     
     def FormRing(self):
+        # sort the IPs in the server list
         while self.ringForming == True:
             sorted_binary_ring = sorted([socket.inet_aton(member) for member in self.serverList])
             self.sorted_ip_ring = [socket.inet_ntoa(node) for node in sorted_binary_ring]
-            #self.printwt(f'Sorted group view is: {self.sorted_ip_ring}')
 
+            # find out the left neighbour
             self.neighbour_left = self.GetNeighbour(self.sorted_ip_ring, MY_IP, direction = 'left')
             self.printwt(f'Sorted group view is: {self.sorted_ip_ring}, my left neighbour is {self.neighbour_left}')
             self.ringForming = False
+
+            # if Iam the new participant, start the leader election
             if self.electionStarter == True:
                 self.electionRunning = True
                 self.ElectionSend()
@@ -200,6 +190,7 @@ class Server():
             self.participant = False
             self.electionMessage = {'mid': MY_IP, 'isLeader': False}
 
+            # if the sorted server list has just one Index, I mark myself as the leader
             if len(self.sorted_ip_ring) == 1:
                 self.isLeader = True
                 self.electionRunning = False
@@ -208,6 +199,7 @@ class Server():
                 self.printwt(f'I am the only server in the system, so the leader IP is {self.leader_IP}')
                 self.SendLeaderIPUpdate()
 
+            # if the sored server list has more than one index, create a socket and send an election message
             elif len(self.sorted_ip_ring) > 1:
                 self.neighbour_left = self.GetNeighbour(self.sorted_ip_ring, MY_IP, direction = 'left')
                 self.printwt(f'Start Election')
@@ -218,30 +210,32 @@ class Server():
 
                 try:
                     electionsend_socket.sendto(election_message.encode(), (self.neighbour_left, SERVER_LEADER_ELECTION_PORT))
-                    #self.printwt(f'sent: {election_message} to {self.neighbour_left}')
 
                 except socket.error as e: 
                     print(str(e))
                         
     def ElectionListenAndForward(self):
+        # create socket
         electionlis_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         electionlis_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         electionlis_socket.bind(('', SERVER_LEADER_ELECTION_PORT))
-        
-        #self.printwt(f'listening to election messages at port {SERVER_LEADER_ELECTION_PORT}')
 
         while True:
+            # listen for election messages
             election_message, neighbour_right = electionlis_socket.recvfrom(buffer_size)
             election_message = json.loads(election_message.decode())
-            #self.printwt(f'received election message {election_message} from my neighbour {neighbour_right}')
-    
+
+            # if the left neighbour is not identified, do it here agein (this is coded because we had some coordination issues of threats)
             if not self.neighbour_left:
                 sorted_binary_ring = sorted([socket.inet_aton(member) for member in self.serverList])
                 self.sorted_ip_ring = [socket.inet_ntoa(node) for node in sorted_binary_ring]
                 self.neighbour_left = self.GetNeighbour(self.sorted_ip_ring, MY_IP, direction='left')
 
+            # if you receive an election message, compare the received IP with your IP and/or also the leader status
             if election_message:
 
+                # if the election message contains that a leader is elected and Iam already marked as a participant
+                # save the leader IP, mark myself as a non-participant and forward the existing election message
                 if election_message.get('isLeader') == True and self.participant:
                     self.leader_IP = election_message['mid']
                     self.printwt(f'Leader Election successfully executed, leader is: {self.leader_IP}')
@@ -251,6 +245,8 @@ class Server():
                     self.isLeader = True
                     self.electionStarter = False
                 
+                # if the election message contains that a leader is elected and the IP in the election message is equal to my IP
+                # save my IP as the leader IP and start the heartbeat procedure
                 elif election_message.get('isLeader') == True and election_message['mid'] == MY_IP:
                     self.printwt('Leader Election finished, I am the leader and starting the heartbeat')
                     self.electionStarter = False
@@ -261,30 +257,32 @@ class Server():
                     time.sleep(3)
                     self.HeartbeatSend()
 
+                # if the IP in the election message is smaller than my IP and Iam already not a participant
+                # mark myself as a participant and forward my IP to my neighbour.
                 if election_message['mid'] < MY_IP and not self.participant:    
                     new_election_message = {'mid': MY_IP, 'isLeader': False }
                     self.participant = True 
                     new_election_message = json.dumps(new_election_message)
                     electionlis_socket.sendto(new_election_message.encode(), (self.neighbour_left, SERVER_LEADER_ELECTION_PORT))
-                    #self.printwt(f'forwarded message: {new_election_message}')
 
+                # if the IP in the election message is bigger than my IP and a leader is already not elected
+                # forward the existing election message
                 elif election_message['mid'] > MY_IP:
                     if election_message.get('isLeader') == False:
                         self.participant = True 
                         election_message = json.dumps(election_message)
                         electionlis_socket.sendto(election_message.encode(), (self.neighbour_left, SERVER_LEADER_ELECTION_PORT))
-                        #self.printwt(f'forwarded message: {election_message}')
 
+                # if the IP in the election message equal to my IP and Iam already a participant
+                # mark myself as a non-participant, forward my IP to my neighbour and also mark in the election message that a leader is elected
                 elif election_message['mid'] == MY_IP and self.participant:
-                    #self.leader_IP = MY_IP
                     new_election_message = {'mid': MY_IP, 'isLeader': True }
                     new_election_message = json.dumps(new_election_message)
                     self.participant = False 
                     electionlis_socket.sendto(new_election_message.encode(), (self.neighbour_left, SERVER_LEADER_ELECTION_PORT))
-                    #self.printwt(f'Forward Elected message: {new_election_message}')
-                    #self.printwt(f'{self.leader_IP} IS THE LEADER!')
     
     def HeartbeatListen(self):
+        # create socket
         heartbeatlis_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         heartbeatlis_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         heartbeatlis_socket.bind(('', SERVER_HEARTBEAT_PORT))
@@ -292,10 +290,12 @@ class Server():
 
         while True:
 
+            # receive hearbeat message and decode it
             try:
                 heartbeat, self.heartbeat_neighbour = heartbeatlis_socket.recvfrom(buffer_size)
                 heartbeat_message = heartbeat.decode()
 
+                # if I received a message, forward it
                 if heartbeat:
                     self.printwt(f'Received {heartbeat_message} from {self.heartbeat_neighbour[0]}')
                     self.heartbeatRunning = True
@@ -303,10 +303,11 @@ class Server():
                     self.HeartbeatSend()
             
             except socket.timeout:
-
+                # do not wait for heartbeats when no leader is elected
                 if self.isLeader == False:
                     pass
 
+                # if no heartbeat received, delete crashed server IP from the server list and inform all existing servers
                 elif self.heartbeat_neighbour:
                     self.printwt(f'No Heartbeat Received')
                     dead_server = self.heartbeat_neighbour[0]   # variable speichert IP & Port, so zugriff auf IP
@@ -316,6 +317,7 @@ class Server():
                     for x in range(len(self.serverList)):
                         heartbeatlis_socket.sendto(dead_server.encode(),(self.serverList[x], SERVER_SERVERLIST_PORT))
                 
+                # if Iam alone, do nothing
                 elif len(self.sorted_ip_ring) == 1:
                     pass
 
@@ -323,21 +325,23 @@ class Server():
                     pass
 
     def HandleServerCrash(self):
+        # create socket
         serverlist_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         serverlist_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         serverlist_socket.bind(('', SERVER_SERVERLIST_PORT))
 
         while True:
+            # receive server crash message
             update, address = serverlist_socket.recvfrom(buffer_size)
             dead_server = update.decode()
-            #self.printwt(f'Received Update of serverList from {address}, crashed server is {dead_server}')
 
             if update:
-
+                # if the IP of crashed server is in the server list, delete it
                 if dead_server in self.serverList:
                     index = self.findIndexOfElement(dead_server, self.serverList)
                     self.serverList.pop(index)
 
+                # if backup server crashed, form a new ring and start the heartbeat again, in case the sorted server list includes more than one IPs
                 if dead_server != self.leader_IP:
                     self.printwt(f'Backupserver {dead_server} crashed, updated serverList: {self.serverList}')
                     self.heartbeat_neighbour = ''
@@ -350,6 +354,7 @@ class Server():
                     elif MY_IP == self.leader_IP and len(self.serverList) == 1:
                         self.printwt('I am the only server in the system, sending no heartbeat')
 
+                # if leader server crashed form start the hole election process again
                 elif dead_server == self.leader_IP:
                     self.printwt(f'Leader {dead_server} crashed, updated serverList: {self.serverList}')
                     self.isLeader = False
@@ -363,9 +368,11 @@ class Server():
         while self.heartbeatRunning == True:
             self.heartbeatMessage = '*'
 
+            # create socket
             heartbeatsend_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             heartbeat_message = self.heartbeatMessage
 
+            # send heartbeat message
             try:
                 heartbeatsend_socket.sendto(heartbeat_message.encode(), (self.neighbour_left, SERVER_HEARTBEAT_PORT))
                 self.printwt(f'Sent {heartbeat_message} to {self.neighbour_left}')
@@ -378,7 +385,7 @@ class Server():
     def ListenForClientAndReply(self):
         # create socket bind to server address
         multilisClient_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        multilisClient_sock.bind(('', MULTICAST_PORT_CLIENT))
+        multilisClient_sock.bind(('', CLIENT_MULTICAST_PORT))
 
         # tell the os to add the socket to the multicast group
         group = socket.inet_aton(MULTICAST_GROUP_IP)
@@ -386,10 +393,9 @@ class Server():
         multilisClient_sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreg)
         
         while True:
-            #try:
-                # receive data from other participants
+
+            # receive data from other participants
             data, address = multilisClient_sock.recvfrom(buffer_size)
-            #self.printwt('Waiting for clients...')
 
             if data:
                 # if you have data decode the message
@@ -401,26 +407,24 @@ class Server():
                     self.clientList.append(newClient_address)
                     self.printwt(f'client list: {self.clientList}')
 
+                # if Iam the leader, answer the client including my IP
                 if MY_IP == self.leader_IP:
                     reply_message = MY_IP
                     multilisClient_sock.sendto(str.encode(reply_message), address)
                     self.printwt('Replied my IP to new client')
                     self.SendAuctionList(newClient_address)
-
-            #except socket.timeout:
-                #break
             
     def SendAuctionList(self, client_address):
+        # if Iam the leader send the updated auction list to the client
         if self.leader_IP == MY_IP:
             biddingplace_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             biddingplace_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            #biddingplace_sock.settimeout(5)
 
             auctionList = json.dumps(self.auctionList)
-            biddingplace_sock.sendto(auctionList.encode(), (client_address, SERVER_MESSAGELIST_PORT))
-            #self.printwt('sent auction list to client')
+            biddingplace_sock.sendto(auctionList.encode(), (client_address, CLIENT_LEADER_COMMUNICATION_PORT))
 
     def SendLeaderIPUpdate(self):
+        # if Iam the leader send the updated leader IP to the clients
         if self.leader_IP == MY_IP:
             newLeaderIP_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             newLeaderIP_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -430,6 +434,7 @@ class Server():
                     newLeaderIP_sock.sendto(self.leader_IP.encode(), (self.clientList[x], SERVER_NEW_LEADER_PORT))
        
     def SendClientListUpdate(self, newServerAddress):
+        # if Iam the leader send the updated client list to the servers
         if self.leader_IP == MY_IP:
             clientListUpdateSend_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             clientListUpdateSend_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -437,10 +442,11 @@ class Server():
             if self.clientList:
                 update_msg = json.dumps(self.clientList)
                 self.printwt("Trying to send clientList to new server")
-                clientListUpdateSend_sock.connect((newServerAddress, SERVER_CLIENTUPDATE_PORT))
+                clientListUpdateSend_sock.connect((newServerAddress, SERVER_CLIENTLIST_PORT))
                 clientListUpdateSend_sock.send(update_msg.encode())
 
     def SendStatusOfAuctions(self, newServerAddress):
+        # if Iam the leader send replication to the servers
         if self.leader_IP == MY_IP:
             statusOfAuctions_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             statusOfAuctions_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -448,7 +454,6 @@ class Server():
             if self.informServer:
                 self.informServer = False
                 auctionUpdate_msg = json.dumps(self.auctionList)
-
                 statusOfAuctions_sock.connect((newServerAddress, SERVER_REPLICA_PORT))
                 statusOfAuctions_sock.send(auctionUpdate_msg.encode())
 
@@ -463,99 +468,96 @@ class Server():
 
 
     def ClientHandling(self):
+        # create socket
         biddingplace_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         biddingplace_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        biddingplace_sock.bind(('', SERVER_MESSAGELIST_PORT))
+        biddingplace_sock.bind(('', CLIENT_LEADER_COMMUNICATION_PORT))
 
         while True:
-
+            # if iam the leader, listen for client messages
             if self.leader_IP == MY_IP: 
-
                 self.printwt('Listening for client request...')
-                #try:
-                    # receive reply data from the other participants
                 bid, address = biddingplace_sock.recvfrom(1024)
 
+                # decode received data
                 if bid:
-                    # decode received data
                     bidInformation = json.loads(bid.decode())
-                    #self.printwt(f'Daten vom Client: {bidInformation}')
 
                     for i in bidInformation:
                         key = i
                         val = bidInformation[key]
-
+                    
+                    # if the client bids on smartphone, compare the incoming with the current bid
+                    # if the incoming bid is higher send a positive response
                     if '1' in bidInformation and val > self.auctionList['smartphone']:
                         self.auctionList['smartphone'] = val
                         reply = 'You are the highest bidder'
                         biddingplace_sock.sendto(reply.encode(), address)
-                    
+
+                    # if the client bids on laptop, compare the incoming with the current bid
+                    # if the incoming bid is higher send a positive response
                     elif '2' in bidInformation and val > self.auctionList['laptop']:
                         self.auctionList['laptop'] = bidInformation[key]
                         reply = 'You are the highest bidder'
                         biddingplace_sock.sendto(reply.encode(), address)
                     
+                    # if the client bids on monitor, compare the incoming with the current bid
+                    # if the incoming bid is higher send a positive response
                     elif '3' in bidInformation and val > self.auctionList['monitor']:
                         self.auctionList['monitor'] = bidInformation[key]
                         reply = 'You are the highest bidder'
                         biddingplace_sock.sendto(reply.encode(), address)
+                    
+                    # if the incoming bid is lower send a negative response
                     else:
                         reply = 'Sorry, you are not the highest bidder'
                         biddingplace_sock.sendto(reply.encode(), address)
 
+                    # send the updated auction list to the client, send replication to the servers
                     self.printwt(self.auctionList)
                     self.SendAuctionList(address[0])
                     self.sendReplica = True
                     self.informServer = False
                     self.SendStatusOfAuctions(address[0])
-                
-
-                """ for x in range(len(self.serverList)):
-                    if self.serverList[x] != self.leader_IP:
-                        biddingplace_sock.sendto(replica_msg.encode(), (self.serverList[x], SERVER_REPLICA_PORT)) """
-                
-                #except socket.error as e:
-                    #print(str(e))
                         
     def ListenForReplica(self):
-        #self.printwt("Listening for replicas...")
+        #create TCP socket
         replicaLis_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         replicaLis_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         replicaLis_sock.bind(('', SERVER_REPLICA_PORT))
         replicaLis_sock.listen()
 
         while True:
-
-            #try:
+            # listen for replication message
             replica, address = replicaLis_sock.accept()
             newAuctionList = replica.recv(buffer_size)
 
+            # decode replication message
             if newAuctionList:
                 newAuctionList = json.loads(newAuctionList.decode())
                 self.printwt(f'Received Updated Auction List: {newAuctionList}')
                 self.auctionList = newAuctionList
 
-            #except socket.timeout:
-                #break
-
     def ListenForClientListUpdates(self):
+        # create TCP socket
         clientUpdateLis_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         clientUpdateLis_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        clientUpdateLis_sock.bind(('', SERVER_CLIENTUPDATE_PORT))
+        clientUpdateLis_sock.bind(('', SERVER_CLIENTLIST_PORT))
         clientUpdateLis_sock.listen()
 
         while True:
-
+            # listen for client list update
             clientListUpdate, address = clientUpdateLis_sock.accept()
             newClientList = clientListUpdate.recv(buffer_size)
 
+            # decode update message
             if newClientList:
                 newClientList = json.loads(newClientList.decode())
                 self.printwt(f'Received client list: {newClientList}')
                 self.clientList = newClientList
 
 
-
+# starting all simultaneously working procedures
 if __name__== '__main__':
     server = Server()
 
